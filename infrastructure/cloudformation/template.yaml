@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for SFTP Lambda function with cleanup'
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Description: Name of the S3 bucket to store SFTP files
+
+Resources:
+  # S3 Bucket for SFTP file storage
+  SFTPBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref S3BucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # KMS Key for encryption
+  SFTPLambdaKMSKey:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      Description: KMS key for SFTP Lambda encryption
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - 'kms:*'
+            Resource: '*'
+
+  # IAM Role for Lambda functions
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: SFTPLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'transfer:*'
+                  - 's3:*'
+                  - 'kms:Decrypt'
+                Resource: '*'
+
+  # Main SFTP Lambda Function
+  SFTPLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: sftp-lambda-function
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: your-deployment-bucket
+        S3Key: lambda-function.zip
+      Runtime: python3.8
+      Timeout: 300
+      MemorySize: 128
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref SFTPBucket
+      KmsKeyArn: !GetAtt SFTPLambdaKMSKey.Arn
+
+  # Cleanup Lambda Function
+  CleanupLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: sftp-cleanup-function
+      Handler: cleanup_function.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: your-deployment-bucket
+        S3Key: cleanup-function.zip
+      Runtime: python3.8
+      Timeout: 300
+      MemorySize: 128
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref SFTPBucket
+      KmsKeyArn: !GetAtt SFTPLambdaKMSKey.Arn
+
+  # CloudWatch Event Rule to trigger cleanup function
+  CleanupScheduleRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: "Schedule for SFTP server cleanup"
+      ScheduleExpression: "rate(5 minutes)"
+      State: "ENABLED"
+      Targets: 
+        - Arn: !GetAtt CleanupLambdaFunction.Arn
+          Id: "CleanupLambdaFunction"
+
+  # Permission for CloudWatch to invoke the cleanup Lambda
+  CleanupLambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref CleanupLambdaFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt CleanupScheduleRule.Arn
+
+Outputs:
+  SFTPLambdaFunctionArn:
+    Description: "ARN of the main SFTP Lambda function"
+    Value: !GetAtt SFTPLambdaFunction.Arn
+  CleanupLambdaFunctionArn:
+    Description: "ARN of the cleanup Lambda function"
+    Value: !GetAtt CleanupLambdaFunction.Arn
+  S3BucketName:
+    Description: "Name of the S3 bucket for SFTP file storage"
+    Value: !Ref SFTPBucket
