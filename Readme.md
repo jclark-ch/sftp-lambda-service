@@ -14,7 +14,6 @@ This project implements a serverless SFTP service using AWS Lambda, AWS Transfer
 6. [Testing](#testing)
 7. [Security Considerations](#security-considerations)
 8. [Contributing](#contributing)
-9. [License](#license)
 
 ## Features
 
